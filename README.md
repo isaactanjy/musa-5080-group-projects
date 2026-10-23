@@ -1,2 +1,2 @@
-# musa-5080-group-projects
-Assignment5
+# MUSA5080 Group Projects
+Assignment 5
