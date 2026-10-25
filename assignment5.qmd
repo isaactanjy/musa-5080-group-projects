@@ -157,11 +157,6 @@ Useful sources: the [Chicago Data Portal](https://data.cityofchicago.org) (find 
 
 Decide which training sales are market sales. Record each rule, why, and how many it removed. Then explore: at least four plots, including a map of price.
 
-```{r}
-train <- read_csv("assignments/chicago_train.csv")
-test <- read_csv("assignments/chicago_test.csv")
-```
-
 Because `is_multisale` denotes sales consisting of more than one house, this was filtered out.
 
 ```{r}
@@ -209,12 +204,11 @@ ggplot() +
 
 ```{r}
 
-# houses: sf object with lotsize_acre and geometry
 na_idx   <- which(is.na(all_sales$lotsize_acre))
 known    <- all_sales[!is.na(all_sales$lotsize_acre), ]
 
 k <- 5
-nn <- st_nearest_feature  # for k=1 only; for k>1 use FNN or nngeo
+nn <- st_nearest_feature 
 library(nngeo)
 neighbors <- st_nn(all_sales[na_idx, ], known, k = k, returnDist = FALSE)
 
@@ -262,6 +256,10 @@ Start with a structure-only baseline. Then add features in steps you can learn f
 ```{r}
 #| eval: false
 #| label: part-2
+
+train <- all_sales |> 
+  filter(split=='train')
+
 ```
 
 ------------------------------------------------------------------------
