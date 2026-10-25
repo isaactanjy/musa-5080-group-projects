@@ -1,7 +1,7 @@
 ---
 title: "Assignment 5: House Price Prediction, Chicago"
 subtitle: "MUSA 5080 · Team assignment"
-author: "Team ___: ___, ___, ___, ___"
+author: "Team Minecraft: Michael Pincus, Isaac Tan, Nathan Leroy"
 date: last-modified
 format:
   html:
@@ -10,6 +10,7 @@ format:
 execute:
   warning: false
   message: false
+dev: ragg_png
 ---
 
 ## The assignment
@@ -23,11 +24,11 @@ Build a model that predicts **single-family sale prices in Chicago, 2023–2025*
 ### A real test
 
 | File | What's in it |
-|---|---|
+|------------------------------------|------------------------------------|
 | `chicago_train.csv` | About 80% of the houses, **with** sale prices |
 | `chicago_test.csv` | The other 20%, **without** sale prices. You predict them; we score you. |
 
-The test houses were held out by house, not by sale, so a house that sold twice is entirely on one side. Your CV RMSE is your estimate. Your test RMSE is the truth. **If they're far apart, something leaked.** 
+The test houses were held out by house, not by sale, so a house that sold twice is entirely on one side. Your CV RMSE is your estimate. Your test RMSE is the truth. **If they're far apart, something leaked.**
 
 **Due:** Friday, October 30. All teammates renders the file on their portfolio and every member submits that link on Canvas. One teammate uploads `team_XX_predictions.csv`.
 
@@ -35,40 +36,46 @@ The test houses were held out by house, not by sale, so a house that sold twice 
 
 ### Rules
 
-::: {.callout-important}
+::: callout-important
 ## 1. Clean training rows once, in Part 1. Never drop test rows.
+
 You must predict every test house, so fill NAs in a feature rather than filtering.
 
 ## 2. Stay inside the time window
+
 Open data from 2023–2025 only.
 
 ## 3. No leakage
+
 Nothing built from sale prices. *Would the Assessor have this number for a house that didn't sell?*
 
 ## 4. The outcome stays in dollars
+
 Transform predictors, not `sale_price`.
 
 ## 5. No prices from the test fold or the future
-No features built from other houses' sale prices. 
+
+No features built from other houses' sale prices.
 :::
 
 ### Please include in your final rendered qmd for this assignment:
 
-| | |
-|---|---|
+|  |  |
+|------------------------------------|------------------------------------|
 | **Model log** | Every model you tried, in order, with CV RMSE and Moran's I. Each row has a note saying why you tried it. |
-| **Features** | Incorporate the feature engineering tricks - including the spatial ones covered these past few weeks. 
+| **Features** | Incorporate the feature engineering tricks - including the spatial ones covered these past few weeks. |
 | **Diagnostics** | Residual maps for your baseline and final model, and what changed. |
 | **Error analysis** | Where your final model fails worst, and whose homes it over-values (Part 4). |
-| **Reasoning** | Choices justified by evidence from your own analysis.
+| **Reasoning** | Choices justified by evidence from your own analysis. |
 
----
+------------------------------------------------------------------------
 
 ## Part 0: Setup (provided)
 
 These helpers are to help you get off the ground.
 
 ```{r}
+#| eval: false
 #| label: setup
 library(tidyverse)
 library(tidycensus)
@@ -80,6 +87,7 @@ options(scipen = 999)
 ```
 
 ```{r}
+#| eval: false
 #| label: helpers
 check_na <- function(formula, df) {
   vars <- all.vars(formula)
@@ -129,10 +137,11 @@ socrata_get <- function(dataset, where, select = NULL, limit = 200000) {
 Build every feature on `all_sales`, so training and test houses get identical features. Split off `train` again whenever you add something.
 
 ```{r}
+#| eval: false
 #| label: load
 all_sales <- bind_rows(
-  read_csv("chicago_train.csv", show_col_types = FALSE) %>% mutate(split = "train"),
-  read_csv("chicago_test.csv",  show_col_types = FALSE) %>% mutate(split = "test")
+  read_csv("assignments/chicago_train.csv", show_col_types = FALSE) %>% mutate(split = "train"),
+  read_csv("assignments/chicago_test.csv",  show_col_types = FALSE) %>% mutate(split = "test")
 ) %>%
   st_as_sf(coords = c("lon", "lat"), crs = 4326) %>%
   st_transform(3435)            # Illinois East State Plane, feet
@@ -142,37 +151,125 @@ all_sales %>% st_drop_geometry() %>% count(split)
 
 Useful sources: the [Chicago Data Portal](https://data.cityofchicago.org) (find a dataset's ID under its API button), the Census via `tidycensus`, and Cook County's open data.
 
----
+------------------------------------------------------------------------
 
 ## Part 1: Clean and explore
 
 Decide which training sales are market sales. Record each rule, why, and how many it removed. Then explore: at least four plots, including a map of price.
 
+Because `is_multisale` denotes sales consisting of more than one house, this was filtered out.
+
 ```{r}
+before <- nrow(all_sales)
+
+all_sales <- all_sales |> 
+  filter(is_multisale==0)
+
+print(nrow(all_sales))
+```
+
+We then searched for remaining predictors with `NA` values:
+
+```{r}
+apply(is.na(all_sales), 2, any)
+```
+
+Predictors with `NA` values included `lotsize_acre`, `num_half_baths`, `num_fireplaces`, `garage_size`, `full_basement`, and `warmairfurnace`.
+
+For the amenity features, we replaced `NA` values with zero:
+
+```{r}
+all_sales <- all_sales |> 
+  mutate(across(c(num_half_baths, num_fireplaces, garage_size, full_basement, warmairfurnace), ~ replace_na(.x, 0)))
+```
+
+For the `NA` value in `lotsize_acre`, we inspected the record, and then decided to impute its area from nearby values.
+
+```{r}
+sum(is.na(all_sales$lotsize_acre))
+```
+
+```{r}
+na_lot <- all_sales |> 
+  filter(is.na(lotsize_acre))
+na_lot
+```
+
+```{r}
+ggplot() + 
+  geom_sf(data=all_sales, size=0.05) + 
+  geom_sf(data=na_lot, color='red', size=3) + 
+  theme_void()
+```
+
+```{r}
+
+na_idx   <- which(is.na(all_sales$lotsize_acre))
+known    <- all_sales[!is.na(all_sales$lotsize_acre), ]
+
+k <- 5
+nn <- st_nearest_feature 
+library(nngeo)
+neighbors <- st_nn(all_sales[na_idx, ], known, k = k, returnDist = FALSE)
+
+all_sales$lotsize_acre[na_idx] <- sapply(neighbors, function(i) median(known$lotsize_acre[i]))
+```
+
+```{r}
+all_sales$lotsize_acre[na_idx]
+```
+
+With data cleaning done, we then moved to exploring the rest of our data.
+
+```{r}
+#| eval: false
 #| label: part-1
+
+library(patchwork)
+
+ggplot(all_sales) + 
+  geom_point(aes(x = building_age, y = log(sale_price)), alpha=0.3) + 
+  geom_smooth(aes(x = building_age, y = log(sale_price)), method = 'lm', color = 'tomato1', formula=y~x+I(x^2)) + 
+  labs(title='Building Age vs. Sale Price',
+       x='Building Age', y='Log of Sale Price') + theme_minimal()
+
+h1 <- ggplot(all_sales) + 
+  geom_histogram(aes(x=sale_price), fill='tomato1') + theme_minimal()
+
+h2<- ggplot(all_sales) + 
+  geom_histogram(aes(x=log(sale_price)), fill='tomato1') + theme_minimal()
+
+h1+h2
+
 ```
 
 **Answer:** What in your exploration shaped your modeling choices?
 
 *Your answer:*
 
----
+------------------------------------------------------------------------
 
 ## Part 2: Build the model
 
 Start with a structure-only baseline. Then add features in steps you can learn from, logging each one. Keep the log in a tibble with columns `model`, `added`, `cv_rmse`, `moran_i`, `notes`.
 
 ```{r}
+#| eval: false
 #| label: part-2
+
+train <- all_sales |> 
+  filter(split=='train')
+
 ```
 
----
+------------------------------------------------------------------------
 
 ## Part 3: Final model
 
 Show your final model, the model log, and baseline vs. final residual maps.
 
 ```{r}
+#| eval: false
 #| label: part-3
 ```
 
@@ -180,7 +277,7 @@ Show your final model, the model log, and baseline vs. final residual maps.
 
 *Your answer:*
 
----
+------------------------------------------------------------------------
 
 ## Part 4: Where it fails, and who pays
 
@@ -189,18 +286,20 @@ Show your final model, the model log, and baseline vs. final residual maps.
 **4B.** Assessors judge their work with the **ratio** of predicted value to sale price. A ratio above 1 means the home is over-valued and its owner over-taxed. Does your model's ratio differ by neighborhood income? Connect your answer to your Part 1 cleaning rules and to "The Tax Divide."
 
 ```{r}
+#| eval: false
 #| label: part-4
 ```
 
 *Your answers:*
 
----
+------------------------------------------------------------------------
 
 ## Part 5: Predict the test houses (provided)
 
 Refit your final recipe on all training sales, then predict every test house. Set `f_final` to your final formula.
 
 ```{r}
+#| eval: false
 #| label: predict-test
 m_final <- lm(f_final, data = st_drop_geometry(train))
 
@@ -213,22 +312,23 @@ stopifnot(nrow(preds) == nrow(test), all(is.finite(preds$pred)))
 write_csv(preds, "team_XX_predictions.csv")     # replace XX with your team number
 ```
 
-**Final CV RMSE:** ___ . When your test RMSE comes back, you'll explain the gap on Q7.
+**Final CV RMSE:** \_\_\_ . When your test RMSE comes back, you'll explain the gap on Q7.
 
----
+------------------------------------------------------------------------
 
 ## Part 6: Reflection (about 300 words, as a team)
 
-1. **Read one coefficient twice:** once as β̂, once for what it does to ŷ.
-2. **Would you hand this model to the Assessor?** What would you warn them about?
+1.  **Read one coefficient twice:** once as β̂, once for what it does to ŷ.
+2.  **Would you hand this model to the Assessor?** What would you warn them about?
 
 *Your answer:*
 
 ### Who did what
 
 | Name | Main contribution |
-|---|---|
-| | |
+|------|-------------------|
+|      |                   |
 
 ### AI Team Statement
-What was your team's AI policy and how was AI used in this assignment? 
+
+What was your team's AI policy and how was AI used in this assignment?
