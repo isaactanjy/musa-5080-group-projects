@@ -428,9 +428,382 @@ model_log
 
 ```
 
+```{r}
+# Load green roofs data
+greenroof_raw <- readr::read_csv(
+  find_csv("greenroofs.csv"),
+  show_col_types = FALSE
+)
+
+names(greenroof_raw)
+head(greenroof_raw)
+```
+
+```{r}
+# Convert coordinates into spatial points
+greenroof_lat_col <- "LATITUDE"
+greenroof_lon_col <- "LONGITUDE"
+
+greenroof_data <- greenroof_raw %>%
+  mutate(
+    .lat = as.numeric(.data[[greenroof_lat_col]]),
+    .lon = as.numeric(.data[[greenroof_lon_col]])
+  ) %>%
+  filter(
+    is.finite(.lat), is.finite(.lon),
+    between(.lat, 41, 43),
+    between(.lon, -89, -87)
+  )
+
+greenroofs <- st_as_sf(
+  greenroof_data,
+  coords = c(".lon", ".lat"),
+  crs = 4326,
+  remove = FALSE
+) %>%
+  st_transform(st_crs(all_sales))
+
+cat("Usable green roofs:", nrow(greenroofs), "\n")
+plot(st_geometry(greenroofs))
+
+# Calculate distance to nearest green roof
+nearest_idx <- st_nearest_feature(all_sales, greenroofs)
+
+all_sales$dist_greenroof_mi <- as.numeric(
+  st_distance(
+    all_sales,
+    greenroofs[nearest_idx, ],
+    by_element = TRUE
+  )
+) / 5280
+
+summary(all_sales$dist_greenroof_mi)
+```
+
+```{r}
+# Load pharmacy data
+pharmacy_raw <- readr::read_csv(
+  find_csv("pharmacy.csv"),
+  show_col_types = FALSE
+)
+
+names(pharmacy_raw)
+head(pharmacy_raw)
+
+```
+
+```{r}
+# Convert pharmacy geometry into points
+pharmacy_wkt_col <- "New Georeferenced Column"
+if (!pharmacy_wkt_col %in% names(pharmacy_raw)) {
+  stop(
+    "WKT column not found. Available columns: ",
+    paste(names(pharmacy_raw), collapse = ", ")
+  )
+}
+
+pharmacy_data <- pharmacy_raw %>%
+  filter(
+    !is.na(.data[[pharmacy_wkt_col]]),
+    grepl(
+      "^\\s*POINT\\s*\\(",
+      .data[[pharmacy_wkt_col]],
+      ignore.case = TRUE
+    )
+  )
+
+# Convert WKT strings into spatial features (longitude/latitude, EPSG:4326)
+pharmacies <- sf::st_as_sf(
+  pharmacy_data,
+  wkt = pharmacy_wkt_col,
+  crs = 4326
+)
+
+pharmacies <- pharmacies[
+  !sf::st_is_empty(pharmacies),
+]
+
+# Keep only Chicago-area locations
+coords <- sf::st_coordinates(pharmacies)
+
+in_chicago <- (
+  coords[, 1] >= -89 & coords[, 1] <= -87 &
+    coords[, 2] >= 41 & coords[, 2] <= 43
+)
+
+pharmacies <- pharmacies[in_chicago, ]
+
+cat("Original pharmacy records:", nrow(pharmacy_raw), "\n")
+cat("Valid Chicago-area pharmacies:", nrow(pharmacies), "\n")
+
+if (nrow(pharmacies) == 0) {
+  stop("No valid Chicago-area pharmacies found. Check the WKT values.")
+}
+
+# Standardize CRS
+pharmacies <- sf::st_transform(
+  pharmacies,
+  sf::st_crs(all_sales)
+)
+
+cat("Number of pharmacy points:", nrow(pharmacies), "\n")
+cat("Column names:\n")
+print(names(pharmacies))
+print(
+  head(sf::st_drop_geometry(pharmacies))
+)
+print(
+  head(as.character(sf::st_as_text(sf::st_geometry(pharmacies))))
+)
+# Plot locations
+plot(
+  sf::st_geometry(pharmacies),
+  main = "Chicago-Area Pharmacy Locations"
+)
+```
+
+```{r}
+# Calculate distance from pharmacy
+cat("Number of pharmacy locations:", nrow(pharmacies), "\n")
+
+if (nrow(pharmacies) == 0) {
+  stop("No pharmacy locations available. Re-run the pharmacy processing cell.")
+}
+
+nearest_idx <- sf::st_nearest_feature(all_sales, pharmacies)
+
+# Convert to miles
+all_sales$dist_pharmacy_mi <- as.numeric(
+  sf::st_distance(
+    all_sales,
+    pharmacies[nearest_idx, ],
+    by_element = TRUE
+  )
+) / 5280
+
+summary(all_sales$dist_pharmacy_mi)
+```
+
+```{r}
+# Load farmers market data
+farmers_raw <- readr::read_csv(
+  find_csv("farmersmarkets.csv"),
+  show_col_types = FALSE
+)
+
+print(names(farmers_raw))
+print(head(farmers_raw))
+```
+
+```{r}
+farmers_lat_col <- "LATITUDE"
+farmers_lon_col <- "LONGITUDE"
+
+if (!all(c(farmers_lat_col, farmers_lon_col) %in% names(farmers_raw))) {
+  stop(
+    "Coordinate columns not found. Available columns: ",
+    paste(names(farmers_raw), collapse = ", ")
+  )
+}
+
+farmers_data <- farmers_raw %>%
+  mutate(
+    .lat = suppressWarnings(as.numeric(.data[[farmers_lat_col]])),
+    .lon = suppressWarnings(as.numeric(.data[[farmers_lon_col]]))
+  ) %>%
+  filter(
+    is.finite(.lat),
+    is.finite(.lon),
+    between(.lat, 41, 43),
+    between(.lon, -89, -87)
+  )
+
+farmers_markets <- sf::st_as_sf(
+  farmers_data,
+  coords = c(".lon", ".lat"),
+  crs = 4326,
+  remove = FALSE
+)
+
+farmers_markets <- sf::st_transform(
+  farmers_markets,
+  sf::st_crs(all_sales)
+)
+
+cat("Original records:", nrow(farmers_raw), "\n")
+cat("Usable Chicago-area farmers markets:", nrow(farmers_markets), "\n")
+
+print(head(sf::st_drop_geometry(farmers_markets)))
+print(head(as.character(sf::st_as_text(sf::st_geometry(farmers_markets)))))
+
+plot(
+  sf::st_geometry(farmers_markets),
+  main = "Chicago-Area Farmers Markets"
+)
+
+
+```
+
+```{r}
+nearest_idx <- sf::st_nearest_feature(
+  all_sales,
+  farmers_markets
+)
+
+# Convert to miles
+all_sales$dist_farmers_market_mi <- as.numeric(
+  sf::st_distance(
+    all_sales,
+    farmers_markets[nearest_idx, ],
+    by_element = TRUE
+  )
+) / 5280
+
+summary(all_sales$dist_farmers_market_mi)
+```
+
+```{r}
+# Load alternative fuel source data
+alt_fuel_raw <- readr::read_csv(
+  find_csv("alt_fuel.csv"),
+  show_col_types = FALSE
+)
+
+print(names(alt_fuel_raw))
+print(head(alt_fuel_raw))
+```
+
+```{r}
+alt_lat_col <- "Latitude"
+alt_lon_col <- "Longitude"
+
+alt_fuel_data <- alt_fuel_raw %>%
+  mutate(
+    .lat = suppressWarnings(as.numeric(.data[[alt_lat_col]])),
+    .lon = suppressWarnings(as.numeric(.data[[alt_lon_col]]))
+  ) %>%
+  filter(
+    is.finite(.lat),
+    is.finite(.lon),
+    between(.lat, 41, 43),
+    between(.lon, -89, -87)
+  )
+
+alt_fuel <- sf::st_as_sf(
+  alt_fuel_data,
+  coords = c(".lon", ".lat"),
+  crs = 4326,
+  remove = FALSE
+)
+
+alt_fuel <- alt_fuel[
+  !sf::st_is_empty(alt_fuel),
+]
+
+alt_fuel <- sf::st_transform(
+  alt_fuel,
+  sf::st_crs(all_sales)
+)
+
+cat("Original records:", nrow(alt_fuel_raw), "\n")
+cat("Usable Chicago-area alternative fuel locations:",
+    nrow(alt_fuel), "\n")
+
+print(head(sf::st_drop_geometry(alt_fuel)))
+print(head(as.character(
+  sf::st_as_text(sf::st_geometry(alt_fuel))
+)))
+
+plot(
+  sf::st_geometry(alt_fuel),
+  main = "Chicago-Area Alternative Fuel Locations"
+)
+```
+
+```{r}
+if (nrow(alt_fuel) == 0) {
+  stop("No usable alternative fuel locations found.")
+}
+
+nearest_idx <- sf::st_nearest_feature(all_sales, alt_fuel)
+
+all_sales$dist_alt_fuel_mi <- as.numeric(
+  sf::st_distance(
+    all_sales,
+    alt_fuel[nearest_idx, ],
+    by_element = TRUE
+  )
+) / 5280
+
+summary(all_sales$dist_alt_fuel_mi)
+```
+
 ------------------------------------------------------------------------
 
 ## Part 3: Final model
+
+```{r}
+#| label: amenity-models
+
+train <- all_sales %>%
+  filter(split == "train")
+
+# Model 5
+f5 <- log(sale_price) ~
+  building_age + I(building_age^2) +
+  log(lotsize_acre) + log(building_000sf) +
+  num_bedrooms + num_full_baths +
+  dist_l_stations_mi + dist_loop_mi +
+  dist_greenroof_mi
+
+model_log <- model_log %>%
+  add_row(
+    model = "m5",
+    added = "Distance to nearest green roof",
+    cv_rmse = cv_rmse(f5, train, back = exp, smear = TRUE),
+    moran_i = moran_resid(f5, train),
+    notes = "Tests whether green-roof proximity improves prediction"
+  )
+
+# Model 6
+f6 <- update(f5, . ~ . + dist_pharmacy_mi)
+
+model_log <- model_log %>%
+  add_row(
+    model = "m6",
+    added = "Distance to nearest pharmacy",
+    cv_rmse = cv_rmse(f6, train, back = exp, smear = TRUE),
+    moran_i = moran_resid(f6, train),
+    notes = "Adds pharmacy proximity to the previous model"
+  )
+
+# Model 7
+f7 <- update(f6, . ~ . + dist_farmers_market_mi)
+
+model_log <- model_log %>%
+  add_row(
+    model = "m7",
+    added = "Distance to nearest farmers market",
+    cv_rmse = cv_rmse(f7, train, back = exp, smear = TRUE),
+    moran_i = moran_resid(f7, train),
+    notes = "Tests whether farmers-market proximity adds predictive value"
+  )
+
+f8 <- update(f7, . ~ . + dist_alt_fuel_mi)
+
+# Model 8
+model_log <- model_log %>%
+  add_row(
+    model = "m8",
+    added = "Distance to nearest alternative fuel location",
+    cv_rmse = cv_rmse(f8, train, back = exp, smear = TRUE),
+    moran_i = moran_resid(f8, train),
+    notes = "Tests the contribution of alternative-fuel proximity"
+  )
+
+model_log %>%
+  arrange(cv_rmse)
+```
 
 Show your final model, the model log, and baseline vs. final residual maps.
 
