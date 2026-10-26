@@ -82,6 +82,7 @@ library(sf)
 library(caret)
 library(spdep)
 library(nngeo)
+library(patchwork)
 options(scipen = 999)
 ```
 
@@ -280,6 +281,7 @@ p2 <- ggplot(all_sales) +
        x='# Full Bathrooms', y='Log of Sale Price') + theme_minimal()
 
 p1 + p2
+
 ```
 
 ```{r}
@@ -303,49 +305,12 @@ ggplot(all_sales) +
 
 Start with a structure-only baseline. Then add features in steps you can learn from, logging each one. Keep the log in a tibble with columns `model`, `added`, `cv_rmse`, `moran_i`, `notes`.
 
-### Adding new predictors 
-
 ```{r}
-#| label: part-2
-
 train <- all_sales |> 
   filter(split=='train')
-
-# L Stations GeoJson File from the CTA
-l_stations <- st_read("https://data.cityofchicago.org/api/v3/views/3tzw-cg4m/query.geojson?accessType=DOWNLOAD") %>%
-  st_transform(st_crs(train))
 ```
 
-```{r}
-#| label: nearest
-train_pts <- st_point_on_surface(train)
-
-l_stations_nearest_idx <- st_nearest_feature(train_pts, l_stations)
-
-train <- train %>%
-  mutate(dist_l_stations_mi = as.numeric(
-    st_distance(train_pts, l_stations[l_stations_nearest_idx, ], by_element = TRUE)) / 5280)
-
-loop <- st_sfc(st_point(c(-87.6276, 41.8782)), crs = 4326) %>%
-  st_transform(st_crs(train))
-
-train <- train %>%
-  mutate(dist_loop_mi = as.numeric(st_distance(train_pts, loop)) / 5280)
-```
-
-```{r}
-p1 <- ggplot(train, aes(x = dist_l_stations_mi, y = log(sale_price))) +
-  geom_point(alpha=0.4) +
-  geom_smooth(method = "lm", formula = y ~ I(x^2)) + theme_minimal()
-
-p2 <- ggplot(train, aes(x = dist_loop_mi, y = log(sale_price))) +
-  geom_point(alpha=0.4) +
-  geom_smooth(method = "lm", formula = y ~ I(x^2)) + theme_minimal()
-
-p1 + p2
-```
-
-### Starting to Model 
+### Starting to Model
 
 Function for Moran's $I$ of the residuals. NOTE: Distance bands were used to handle instances of identical points (such as condos in the same building)
 
@@ -392,6 +357,75 @@ model_log <- model_log |>
           notes = "RMSE back-transformed to dollars")
 
 model_log 
+```
+
+## Adding in New Predictors
+
+```{r}
+#| label: part-2
+
+# L Stations GeoJson File from the CTA
+l_stations <- st_read("https://data.cityofchicago.org/api/v3/views/3tzw-cg4m/query.geojson?accessType=DOWNLOAD") %>%
+  st_transform(st_crs(all_sales))
+```
+
+```{r}
+#| label: nearest
+all_sales_pts <- st_point_on_surface(all_sales)
+
+l_stations_nearest_idx <- st_nearest_feature(all_sales_pts, l_stations)
+
+all_sales <- all_sales %>%
+  mutate(dist_l_stations_mi = as.numeric(
+    st_distance(all_sales_pts, l_stations[l_stations_nearest_idx, ], by_element = TRUE)) / 5280)
+
+loop <- st_sfc(st_point(c(-87.6276, 41.8782)), crs = 4326) %>%
+  st_transform(st_crs(all_sales))
+
+all_sales <- all_sales %>%
+  mutate(dist_loop_mi = as.numeric(st_distance(all_sales_pts, loop)) / 5280)
+```
+
+```{r}
+p1 <- ggplot(all_sales, aes(x = dist_l_stations_mi, y = log(sale_price))) +
+  geom_point(alpha=0.4) +
+  geom_smooth(method = "lm", formula = y ~ I(x^2)) + theme_minimal()
+
+p2 <- ggplot(all_sales, aes(x = dist_loop_mi, y = log(sale_price))) +
+  geom_point(alpha=0.4) +
+  geom_smooth(method = "lm", formula = y ~ I(x^2)) + theme_minimal()
+
+p1 + p2
+```
+
+```{r}
+#| label: model add nearest
+# split into training 
+
+train <- all_sales |> 
+  filter(split=='train')
+
+f3 <- log(sale_price) ~ building_age + I(building_age^2) + log(lotsize_acre) + log(building_000sf) + num_bedrooms + num_full_baths + dist_l_stations_mi
+
+model_log <- model_log |>
+  add_row(model = "m3", added = "Added Distance to L Stations",
+          cv_rmse = cv_rmse(f3, train, back = exp, smear = TRUE),
+          moran_i = moran_resid(f3, train),
+          notes = "Added Distance to L Stations")
+
+model_log 
+
+f4 <- log(sale_price) ~ building_age + I(building_age^2) + log(lotsize_acre) + log(building_000sf) + num_bedrooms + num_full_baths + dist_l_stations_mi + dist_loop_mi
+
+model_log <- model_log |>
+  add_row(model = "m4", added = "Added Distance to the Loop",
+          cv_rmse = cv_rmse(f4, train, back = exp, smear = TRUE),
+          moran_i = moran_resid(f4, train),
+          notes = "Added Distance to the Loop")
+
+model_log 
+
+
 ```
 
 ------------------------------------------------------------------------
