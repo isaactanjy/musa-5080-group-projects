@@ -24,7 +24,7 @@ Build a model that predicts **single-family sale prices in Chicago, 2023–2025*
 ### A real test
 
 | File | What's in it |
-|----|----|
+|------------------------------------|------------------------------------|
 | `chicago_train.csv` | About 80% of the houses, **with** sale prices |
 | `chicago_test.csv` | The other 20%, **without** sale prices. You predict them; we score you. |
 
@@ -61,7 +61,7 @@ No features built from other houses' sale prices.
 ### Please include in your final rendered qmd for this assignment:
 
 |  |  |
-|----|----|
+|------------------------------------|------------------------------------|
 | **Model log** | Every model you tried, in order, with CV RMSE and Moran's I. Each row has a note saying why you tried it. |
 | **Features** | Incorporate the feature engineering tricks - including the spatial ones covered these past few weeks. |
 | **Diagnostics** | Residual maps for your baseline and final model, and what changed. |
@@ -75,7 +75,6 @@ No features built from other houses' sale prices.
 These helpers are to help you get off the ground.
 
 ```{r}
-#| eval: false
 #| label: setup
 library(tidyverse)
 library(tidycensus)
@@ -86,8 +85,11 @@ library(nngeo)
 options(scipen = 999)
 ```
 
+Because we are using log(y) in our model, we updated the CV RMSE function to back-transform the out-of-fold predictions with `exp()` before computing the error, so RMSE is measured in dollars against the original `sale_price`. The model is still fit on the log scale, only the evaluation is in dollars. We did not exponentiate the log-scale RMSE itself.
+
+Predictions are saved from 10-fold cross-validation (fixed seed), and the RMSE pools all out-of-fold errors. The function includes a Duan smearing correction (`smear = TRUE`), which rescales the back-transformed predictions to estimate the conditional mean rather than the median. This puts the baseline and each consecutive log(y) model on the same scale, so their CV RMSE values are directly comparable.
+
 ```{r}
-#| eval: false
 #| label: helpers
 check_na <- function(formula, df) {
   vars <- all.vars(formula)
@@ -98,14 +100,24 @@ check_na <- function(formula, df) {
   }
 }
 
-# 10-fold CV RMSE, same folds every time
-cv_rmse <- function(formula, data) {
+# Updated CV RMSE function with smear and back transforming 
+cv_rmse <- function(formula, data, back = identity, smear = FALSE) {
   df <- if (inherits(data, "sf")) st_drop_geometry(data) else data
   check_na(formula, df)
   set.seed(5080)
   fit <- train(formula, data = df, method = "lm",
-               trControl = trainControl(method = "cv", number = 10))
-  fit$results$RMSE
+               trControl = trainControl(method = "cv", number = 10,
+                                        savePredictions = "final"))
+  
+  p      <- fit$pred
+  y_var  <- all.vars(formula)[1]
+  actual <- df[[y_var]][p$rowIndex]       # original dollars
+  pred   <- back(p$pred)                  # back-transformed predictions
+  
+  # Duan smearing using out-of-fold residuals on the model's own scale
+  if (smear) pred <- pred * mean(back(p$obs - p$pred))
+  
+  sqrt(mean((actual - pred)^2))
 }
 
 # Each house's prediction from the fold where it was held out
@@ -137,7 +149,6 @@ socrata_get <- function(dataset, where, select = NULL, limit = 200000) {
 Build every feature on `all_sales`, so training and test houses get identical features. Split off `train` again whenever you add something.
 
 ```{r}
-#| eval: false
 #| label: load
 all_sales <- bind_rows(
   read_csv("data/chicago_train.csv", show_col_types = FALSE) %>% mutate(split = "train"),
@@ -159,6 +170,7 @@ model_log <- tibble(
   model   = character(),
   added   = character(),
   cv_rmse = numeric(),
+  moran_i = numeric(), 
   notes   = character()
 )
 ```
@@ -234,7 +246,6 @@ all_sales$lotsize_acre[na_idx]
 With data cleaning done, we then moved to exploring the rest of our data.
 
 ```{r}
-#| eval: false
 #| label: part-1
 
 library(patchwork)
@@ -255,6 +266,33 @@ h1+h2
 
 ```
 
+```{r}
+p1 <- ggplot(all_sales) + 
+  geom_point(aes(x = num_bedrooms, y = log(sale_price)), alpha=0.3) + 
+  geom_smooth(aes(x = num_bedrooms, y = log(sale_price)), method = 'lm', color = 'tomato1', formula=y~x) + 
+  labs(title='# Bedrooms vs. Sale Price',
+       x='# Bedrooms', y='Log of Sale Price') + theme_minimal()
+
+p2 <- ggplot(all_sales) + 
+  geom_point(aes(x = num_full_baths, y = log(sale_price)), alpha=0.3) + 
+  geom_smooth(aes(x = num_full_baths, y = log(sale_price)), method = 'lm', color = 'tomato1', formula=y~x+I(x^2)) + 
+  labs(title='# Full Bathrooms vs. Sale Price',
+       x='# Full Bathrooms', y='Log of Sale Price') + theme_minimal()
+
+p1 + p2
+```
+
+```{r}
+ggplot(all_sales) + 
+  geom_histogram(aes(x=log(lotsize_acre)))
+
+```
+
+```{r}
+ggplot(all_sales) + 
+  geom_histogram(aes(x=log(building_000sf)))
+```
+
 **Answer:** What in your exploration shaped your modeling choices?
 
 *Your answer:*
@@ -265,8 +303,9 @@ h1+h2
 
 Start with a structure-only baseline. Then add features in steps you can learn from, logging each one. Keep the log in a tibble with columns `model`, `added`, `cv_rmse`, `moran_i`, `notes`.
 
+### Adding new predictors 
+
 ```{r}
-#| eval: false
 #| label: part-2
 
 train <- all_sales |> 
@@ -286,37 +325,73 @@ l_stations_nearest_idx <- st_nearest_feature(train_pts, l_stations)
 train <- train %>%
   mutate(dist_l_stations_mi = as.numeric(
     st_distance(train_pts, l_stations[l_stations_nearest_idx, ], by_element = TRUE)) / 5280)
-```
 
-```{r}
-#| label: model L stations
-
-f1 <- sale_price ~ dist_l_stations_mi
-
-model_log <- model_log %>%
-  add_row(model = "m1", added = "Distance to L Stations",
-          cv_rmse = cv_rmse(f1, train),
-          notes = "Distance in Miles")
-
-model_log
-```
-
-```{r}
-#| label: distance to loop (Jackson Station as midpoint)
 loop <- st_sfc(st_point(c(-87.6276, 41.8782)), crs = 4326) %>%
   st_transform(st_crs(train))
 
 train <- train %>%
   mutate(dist_loop_mi = as.numeric(st_distance(train_pts, loop)) / 5280)
+```
 
-f2 <- sale_price ~ dist_l_stations_mi + dist_loop_mi
+```{r}
+p1 <- ggplot(train, aes(x = dist_l_stations_mi, y = log(sale_price))) +
+  geom_point(alpha=0.4) +
+  geom_smooth(method = "lm", formula = y ~ I(x^2)) + theme_minimal()
 
-model_log <- model_log %>%
-  add_row(model = "m2", added = "Distance to Loop",
-          cv_rmse = cv_rmse(f2, train),
-          notes = "Distance in Miles")
+p2 <- ggplot(train, aes(x = dist_loop_mi, y = log(sale_price))) +
+  geom_point(alpha=0.4) +
+  geom_smooth(method = "lm", formula = y ~ I(x^2)) + theme_minimal()
 
-model_log
+p1 + p2
+```
+
+### Starting to Model 
+
+Function for Moran's $I$ of the residuals. NOTE: Distance bands were used to handle instances of identical points (such as condos in the same building)
+
+```{r}
+moran_resid <- function(formula, data, k = 8) {
+  mod <- lm(formula, data = data)
+  
+  # Spatial weights matrix 
+  coords <- st_coordinates(st_centroid(st_geometry(data)))
+  nb <- dnearneigh(coords, d1 = 0, d2 = 500)      
+  lw <- nb2listw(nb, style = "W", zero.policy = TRUE)
+  moran.test(residuals(mod), lw, zero.policy = TRUE)
+  
+  # Moran's I of residuals 
+  mt <- moran.test(residuals(mod), lw)
+  unname(mt$estimate["Moran I statistic"])
+}
+```
+
+```{r}
+#| label: baseline model
+
+f1 <- sale_price ~ building_age + lotsize_acre + building_000sf + num_bedrooms + num_full_baths
+  
+model_log <- model_log |> 
+    add_row(model = "m1", added = "Baseline",
+            cv_rmse = cv_rmse(f1, train),
+            moran_i = moran_resid(f1, train),
+            notes = "")
+
+model_log 
+
+```
+
+```{r}
+#| label: logged and squared variables 
+
+f2 <- log(sale_price) ~ building_age + I(building_age^2) + log(lotsize_acre) + log(building_000sf) + num_bedrooms + num_full_baths
+
+model_log <- model_log |>
+  add_row(model = "m2", added = "Logged and squared variables",
+          cv_rmse = cv_rmse(f2, train, back = exp, smear = TRUE),
+          moran_i = moran_resid(f2, train),
+          notes = "RMSE back-transformed to dollars")
+
+model_log 
 ```
 
 ------------------------------------------------------------------------
@@ -327,7 +402,7 @@ Show your final model, the model log, and baseline vs. final residual maps.
 
 ```{r}
 #| eval: false
-#| label: part-3
+#| label: part-3 
 ```
 
 **Answer:** What helped most, and what disappointed you? Use your log.
@@ -360,7 +435,7 @@ Refit your final recipe on all training sales, then predict every test house. Se
 #| label: predict-test
 m_final <- lm(f_final, data = st_drop_geometry(train))
 
-test <- all_sales %>% filter(split == "test")
+test <- all_sales |>  filter(split == "test")
 check_na(f_final, st_drop_geometry(test))       # fill NAs; never drop test rows
 
 preds <- tibble(id = test$id, pred = predict(m_final, st_drop_geometry(test)))
