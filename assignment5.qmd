@@ -86,10 +86,6 @@ library(patchwork)
 options(scipen = 999)
 ```
 
-Because we are using log(y) in our model, we updated the CV RMSE function to back-transform the out-of-fold predictions with `exp()` before computing the error, so RMSE is measured in dollars against the original `sale_price`. The model is still fit on the log scale, only the evaluation is in dollars. We did not exponentiate the log-scale RMSE itself.
-
-Predictions are saved from 10-fold cross-validation (fixed seed), and the RMSE pools all out-of-fold errors. The function includes a Duan smearing correction (`smear = TRUE`), which rescales the back-transformed predictions to estimate the conditional mean rather than the median. This puts the baseline and each consecutive log(y) model on the same scale, so their CV RMSE values are directly comparable.
-
 ```{r}
 #| label: helpers
 check_na <- function(formula, df) {
@@ -101,24 +97,14 @@ check_na <- function(formula, df) {
   }
 }
 
-# Updated CV RMSE function with smear and back transforming 
-cv_rmse <- function(formula, data, back = identity, smear = FALSE) {
+# 10-fold CV RMSE, same folds every time
+cv_rmse <- function(formula, data) {
   df <- if (inherits(data, "sf")) st_drop_geometry(data) else data
   check_na(formula, df)
   set.seed(5080)
   fit <- train(formula, data = df, method = "lm",
-               trControl = trainControl(method = "cv", number = 10,
-                                        savePredictions = "final"))
-  
-  p      <- fit$pred
-  y_var  <- all.vars(formula)[1]
-  actual <- df[[y_var]][p$rowIndex]       # original dollars
-  pred   <- back(p$pred)                  # back-transformed predictions
-  
-  # Duan smearing using out-of-fold residuals on the model's own scale
-  if (smear) pred <- pred * mean(back(p$obs - p$pred))
-  
-  sqrt(mean((actual - pred)^2))
+               trControl = trainControl(method = "cv", number = 10))
+  fit$results$RMSE
 }
 
 # Each house's prediction from the fold where it was held out
@@ -252,33 +238,25 @@ With data cleaning done, we then moved to exploring the rest of our data.
 library(patchwork)
 
 ggplot(all_sales) + 
-  geom_point(aes(x = building_age, y = log(sale_price)), alpha=0.3) + 
-  geom_smooth(aes(x = building_age, y = log(sale_price)), method = 'lm', color = 'tomato1', formula=y~x+I(x^2)) + 
+  geom_point(aes(x = building_age, y = sale_price), alpha=0.3) + 
+  geom_smooth(aes(x = building_age, y = sale_price), method = 'lm', color = 'tomato1', formula=y~x+I(x^2)) + 
   labs(title='Building Age vs. Sale Price',
-       x='Building Age', y='Log of Sale Price') + theme_minimal()
-
-h1 <- ggplot(all_sales) + 
-  geom_histogram(aes(x=sale_price), fill='tomato1') + theme_minimal()
-
-h2<- ggplot(all_sales) + 
-  geom_histogram(aes(x=log(sale_price)), fill='tomato1') + theme_minimal()
-
-h1+h2
+       x='Building Age', y='Sale Price') + theme_minimal()
 
 ```
 
 ```{r}
 p1 <- ggplot(all_sales) + 
-  geom_point(aes(x = num_bedrooms, y = log(sale_price)), alpha=0.3) + 
-  geom_smooth(aes(x = num_bedrooms, y = log(sale_price)), method = 'lm', color = 'tomato1', formula=y~x) + 
+  geom_point(aes(x = num_bedrooms, y = sale_price), alpha=0.3) + 
+  geom_smooth(aes(x = num_bedrooms, y = sale_price), method = 'lm', color = 'tomato1', formula=y~x) + 
   labs(title='# Bedrooms vs. Sale Price',
-       x='# Bedrooms', y='Log of Sale Price') + theme_minimal()
+       x='# Bedrooms', y='Sale Price') + theme_minimal()
 
 p2 <- ggplot(all_sales) + 
-  geom_point(aes(x = num_full_baths, y = log(sale_price)), alpha=0.3) + 
-  geom_smooth(aes(x = num_full_baths, y = log(sale_price)), method = 'lm', color = 'tomato1', formula=y~x+I(x^2)) + 
+  geom_point(aes(x = num_full_baths, y = sale_price), alpha=0.3) + 
+  geom_smooth(aes(x = num_full_baths, y = sale_price), method = 'lm', color = 'tomato1', formula=y~x+I(x^2)) + 
   labs(title='# Full Bathrooms vs. Sale Price',
-       x='# Full Bathrooms', y='Log of Sale Price') + theme_minimal()
+       x='# Full Bathrooms', y='Sale Price') + theme_minimal()
 
 p1 + p2
 
@@ -348,13 +326,13 @@ model_log
 ```{r}
 #| label: logged and squared variables 
 
-f2 <- log(sale_price) ~ building_age + I(building_age^2) + log(lotsize_acre) + log(building_000sf) + num_bedrooms + num_full_baths
+f2 <- sale_price ~ building_age + I(building_age^2) + lotsize_acre + building_000sf + num_bedrooms + num_full_baths
 
 model_log <- model_log |>
-  add_row(model = "m2", added = "Logged and squared variables",
-          cv_rmse = cv_rmse(f2, train, back = exp, smear = TRUE),
+  add_row(model = "m2", added = "Squared building age",
+          cv_rmse = cv_rmse(f2, train),
           moran_i = moran_resid(f2, train),
-          notes = "RMSE back-transformed to dollars")
+          notes = "")
 
 model_log 
 ```
@@ -387,11 +365,11 @@ all_sales <- all_sales %>%
 ```
 
 ```{r}
-p1 <- ggplot(all_sales, aes(x = dist_l_stations_mi, y = log(sale_price))) +
+p1 <- ggplot(all_sales, aes(x = dist_l_stations_mi, y = sale_price)) +
   geom_point(alpha=0.4) +
   geom_smooth(method = "lm", formula = y ~ I(x^2)) + theme_minimal()
 
-p2 <- ggplot(all_sales, aes(x = dist_loop_mi, y = log(sale_price))) +
+p2 <- ggplot(all_sales, aes(x = dist_loop_mi, y = sale_price)) +
   geom_point(alpha=0.4) +
   geom_smooth(method = "lm", formula = y ~ I(x^2)) + theme_minimal()
 
@@ -405,21 +383,21 @@ p1 + p2
 train <- all_sales |> 
   filter(split=='train')
 
-f3 <- log(sale_price) ~ building_age + I(building_age^2) + log(lotsize_acre) + log(building_000sf) + num_bedrooms + num_full_baths + dist_l_stations_mi
+f3 <- sale_price ~ building_age + I(building_age^2) + lotsize_acre + building_000sf + num_bedrooms + num_full_baths + dist_l_stations_mi
 
 model_log <- model_log |>
   add_row(model = "m3", added = "Added Distance to L Stations",
-          cv_rmse = cv_rmse(f3, train, back = exp, smear = TRUE),
+          cv_rmse = cv_rmse(f3, train),
           moran_i = moran_resid(f3, train),
           notes = "Added Distance to L Stations")
 
 model_log 
 
-f4 <- log(sale_price) ~ building_age + I(building_age^2) + log(lotsize_acre) + log(building_000sf) + num_bedrooms + num_full_baths + dist_l_stations_mi + dist_loop_mi
+f4 <- sale_price ~ building_age + I(building_age^2) + lotsize_acre + building_000sf + num_bedrooms + num_full_baths + dist_l_stations_mi + dist_loop_mi
 
 model_log <- model_log |>
   add_row(model = "m4", added = "Added Distance to the Loop",
-          cv_rmse = cv_rmse(f4, train, back = exp, smear = TRUE),
+          cv_rmse = cv_rmse(f4, train),
           moran_i = moran_resid(f4, train),
           notes = "Added Distance to the Loop")
 
@@ -430,10 +408,8 @@ model_log
 
 ```{r}
 # Load green roofs data
-greenroof_raw <- readr::read_csv(
-  find_csv("greenroofs.csv"),
-  show_col_types = FALSE
-)
+greenroof_raw <- read_csv(("data/greenroofs.csv"),
+  show_col_types = FALSE)
 
 names(greenroof_raw)
 head(greenroof_raw)
@@ -482,8 +458,7 @@ summary(all_sales$dist_greenroof_mi)
 
 ```{r}
 # Load pharmacy data
-pharmacy_raw <- readr::read_csv(
-  find_csv("pharmacy.csv"),
+pharmacy_raw <- read_csv(("data/pharmacy.csv"),
   show_col_types = FALSE
 )
 
@@ -586,8 +561,7 @@ summary(all_sales$dist_pharmacy_mi)
 
 ```{r}
 # Load farmers market data
-farmers_raw <- readr::read_csv(
-  find_csv("farmersmarkets.csv"),
+farmers_raw <- read_csv(("data/farmersmarkets.csv"),
   show_col_types = FALSE
 )
 
@@ -664,8 +638,7 @@ summary(all_sales$dist_farmers_market_mi)
 
 ```{r}
 # Load alternative fuel source data
-alt_fuel_raw <- readr::read_csv(
-  find_csv("alt_fuel.csv"),
+alt_fuel_raw <- read_csv(("data/alt_fuel.csv"),
   show_col_types = FALSE
 )
 
@@ -738,10 +711,6 @@ all_sales$dist_alt_fuel_mi <- as.numeric(
 summary(all_sales$dist_alt_fuel_mi)
 ```
 
-------------------------------------------------------------------------
-
-## Part 3: Final model
-
 ```{r}
 #| label: amenity-models
 
@@ -749,9 +718,9 @@ train <- all_sales %>%
   filter(split == "train")
 
 # Model 5
-f5 <- log(sale_price) ~
+f5 <- sale_price ~
   building_age + I(building_age^2) +
-  log(lotsize_acre) + log(building_000sf) +
+  lotsize_acre + building_000sf +
   num_bedrooms + num_full_baths +
   dist_l_stations_mi + dist_loop_mi +
   dist_greenroof_mi
@@ -760,7 +729,7 @@ model_log <- model_log %>%
   add_row(
     model = "m5",
     added = "Distance to nearest green roof",
-    cv_rmse = cv_rmse(f5, train, back = exp, smear = TRUE),
+    cv_rmse = cv_rmse(f5, train),
     moran_i = moran_resid(f5, train),
     notes = "Tests whether green-roof proximity improves prediction"
   )
@@ -772,7 +741,7 @@ model_log <- model_log %>%
   add_row(
     model = "m6",
     added = "Distance to nearest pharmacy",
-    cv_rmse = cv_rmse(f6, train, back = exp, smear = TRUE),
+    cv_rmse = cv_rmse(f6, train),
     moran_i = moran_resid(f6, train),
     notes = "Adds pharmacy proximity to the previous model"
   )
@@ -784,7 +753,7 @@ model_log <- model_log %>%
   add_row(
     model = "m7",
     added = "Distance to nearest farmers market",
-    cv_rmse = cv_rmse(f7, train, back = exp, smear = TRUE),
+    cv_rmse = cv_rmse(f7, train),
     moran_i = moran_resid(f7, train),
     notes = "Tests whether farmers-market proximity adds predictive value"
   )
@@ -796,25 +765,119 @@ model_log <- model_log %>%
   add_row(
     model = "m8",
     added = "Distance to nearest alternative fuel location",
-    cv_rmse = cv_rmse(f8, train, back = exp, smear = TRUE),
+    cv_rmse = cv_rmse(f8, train),
     moran_i = moran_resid(f8, train),
     notes = "Tests the contribution of alternative-fuel proximity"
   )
 
-model_log %>%
-  arrange(cv_rmse)
 ```
+
+```{r}
+model_log %>%
+  arrange(model)
+```
+
+### Adding Fixed Effects
+
+```{r}
+zones <- st_read('data/Chicago_Community_areas.geojson')
+```
+
+```{r}
+zones <- zones |> 
+  st_transform('EPSG:3435')
+
+```
+
+```{r}
+all_sales <- st_join(
+  all_sales,
+  zones['community'],  
+  join = st_within                
+)
+
+```
+
+After visual inspection, the NAs in the dataset were edge cases. Therefore, we decided to interpolate the values with the nearest neighborhood.
+
+```{r}
+na_rows <- is.na(all_sales$community)
+
+nearest <- st_nearest_feature(all_sales[na_rows, ], zones)
+
+all_sales$community[na_rows] <- zones$community[nearest]
+
+sum(is.na(all_sales$community))
+```
+
+------------------------------------------------------------------------
+
+## Part 3: Final model
 
 Show your final model, the model log, and baseline vs. final residual maps.
 
 ```{r}
-#| eval: false
-#| label: part-3 
+#| label: part-3
+
+train <- all_sales |> 
+  filter(split == "train")
+
+f_final <- sale_price ~ building_age + I(building_age^2) + lotsize_acre + 
+  building_000sf + num_bedrooms + num_full_baths + dist_l_stations_mi + 
+  dist_loop_mi + dist_alt_fuel_mi + community
+
+model_log <- model_log %>%
+  add_row(
+    model = "m_final",
+    added = "Fixed neighborhood effect",
+    cv_rmse = cv_rmse(f_final, train),
+    moran_i = moran_resid(f_final, train),
+    notes = "Added fixed effect based on Chicago Community Areas"
+  )
+
+model_log
+```
+
+```{r}
+
+m_final    <- lm(f_final, data = train)
+m_baseline <- lm(f1, data = train)
+
+add_resid <- function(data, model, name) {
+  r <- residuals(model)
+  data[[name]] <- NA_real_
+  data[[name]][match(names(r), rownames(data))] <- unname(r)
+  data
+}
+
+train <- train |>
+  add_resid(m_final,    "resid_final") |>
+  add_resid(m_baseline, "resid_base")
+
+map_resid <- function(var, title, data = train, basemap = zones) {
+  ggplot() +
+    geom_sf(data = basemap, fill = "grey98", color = "grey85", linewidth = 0.1) +
+    geom_sf(
+      data = data[order(abs(data[[var]])), ],
+      aes(color = .data[[var]]),
+      size = 0.8, alpha = 0.4
+    ) +
+    scale_color_gradient2(
+      low = "#2166ac", mid = "grey95", high = "#b2182b",
+      midpoint = 0, limits = c(-900, 900), oob = scales::squish
+    ) +
+    labs(title = title, color = "Residual") +
+    theme_void()
+}
+
+map_resid("resid_base",  "Baseline model residuals") + 
+map_resid("resid_final", "Final model residuals")
+
 ```
 
 **Answer:** What helped most, and what disappointed you? Use your log.
 
-*Your answer:*
+What helped most in our model was adding the fixed effects, bringing the RMSE down around \$60,000. What disappointed us was the distance-based measures (such as pharmacies and farmers markets) which brought the RMSE down only slightly.,
 
 ------------------------------------------------------------------------
 
