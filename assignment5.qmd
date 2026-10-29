@@ -920,17 +920,32 @@ write_csv(preds, "team_XX_predictions.csv")     # replace XX with your team numb
 
 ## Part 6: Reflection (about 300 words, as a team)
 
-1.  **Read one coefficient twice:** once as β̂, once for what it does to ŷ.
-2.  **Would you hand this model to the Assessor?** What would you warn them about?
+```{r}
+summary(m_final)
+```
 
-*Your answer:*
+Our coefficients can be used to see the impact of each variable on our final prediction. We can use the statistically significant variable dist_loop_mi (distance from the Loop) as an example. In this case, our coefficient is -16,634.
+
+Read as $\hat{\beta}$: Holding building characteristics, all other distance variables, and neighborhood constant, each additional mile from the Loop is associated with a decrease of approximately \$16,634 in predicted sale price.
+
+Read as $\hat{y}$: If two houses with identical building characteristics are in the same neighborhood, but one house is 1 mile farther from the Loop than the other, our model predicts that the more distant house will sell for approximately \$16,634 less.
+
+***Would we hand this model to the assessor?***
+
+The r-squared of the final model is approximately 0.773, meaning it explains 77.3 percent of the variation in sale prices in the training data. The remaining 22.7 percent of the variation is due to unidentified characteristics (which may include factors such as crime rate or proximity to factories). With additional time, this model could be improved on with the identification of additional predictors.
+
+Although adding additional predictors and neighborhood effects decreased our RMSE approximately 22.8 percent, our final RMSE (\$226,544) suggests that there is still a substantial amount of prediction errors in the model. The final model's Moran's I of approximately 0.240 suggests a weak-to-moderate clustering effect across our residuals, which could potentially indicate that nearby properties could share characteristics that the model did not fully capture. To be confident in this model's predictive power, we would need to examine additional neighborhood-level characteristics and reevaluate the model to reduce the uneven predictive accuracy across Chicago.
+
+Overall, we suggest that this model is useful as a preliminary, exploratory tool to get a sense of house values, but it should not be relied on alone to determine assessed values. It should certainly not be considered an end-all assessment of house values.
 
 ### Who did what
 
-| Name | Main contribution |
-|------|-------------------|
-|      |                   |
+| Name   | Main contribution                       |
+|--------|-----------------------------------------|
+| Nathan | Distance-based coefficients, reflection |
 
 ### AI Team Statement
 
 What was your team's AI policy and how was AI used in this assignment?
+
+Nathan: I used AI to convert the lat-long coordinates and WKT geometry columns in the CSV files to cleaned spatial point features, which allowed me to calculate the distance from each property to the nearest amenity (pharmacy, alternative charging station, etc.).
