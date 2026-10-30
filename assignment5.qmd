@@ -83,7 +83,12 @@ library(caret)
 library(spdep)
 library(nngeo)
 library(patchwork)
+library(showtext)
 options(scipen = 999)
+
+font_add_google("Roboto", family = "roboto")
+
+showtext_auto()
 ```
 
 ```{r}
@@ -207,13 +212,6 @@ na_lot
 ```
 
 ```{r}
-ggplot() + 
-  geom_sf(data=all_sales, size=0.05) + 
-  geom_sf(data=na_lot, color='red', size=3) + 
-  theme_void()
-```
-
-```{r}
 
 na_idx   <- which(is.na(all_sales$lotsize_acre))
 known    <- all_sales[!is.na(all_sales$lotsize_acre), ]
@@ -241,7 +239,7 @@ ggplot(all_sales) +
   geom_point(aes(x = building_age, y = sale_price), alpha=0.3) + 
   geom_smooth(aes(x = building_age, y = sale_price), method = 'lm', color = 'tomato1', formula=y~x+I(x^2)) + 
   labs(title='Building Age vs. Sale Price',
-       x='Building Age', y='Sale Price') + theme_minimal()
+       x='Building Age', y='Sale Price') + theme_minimal(base_family='roboto')
 
 ```
 
@@ -250,32 +248,36 @@ p1 <- ggplot(all_sales) +
   geom_point(aes(x = num_bedrooms, y = sale_price), alpha=0.3) + 
   geom_smooth(aes(x = num_bedrooms, y = sale_price), method = 'lm', color = 'tomato1', formula=y~x) + 
   labs(title='# Bedrooms vs. Sale Price',
-       x='# Bedrooms', y='Sale Price') + theme_minimal()
+       x='# Bedrooms', y='Sale Price') + theme_minimal(base_family='roboto')
 
 p2 <- ggplot(all_sales) + 
   geom_point(aes(x = num_full_baths, y = sale_price), alpha=0.3) + 
   geom_smooth(aes(x = num_full_baths, y = sale_price), method = 'lm', color = 'tomato1', formula=y~x+I(x^2)) + 
   labs(title='# Full Bathrooms vs. Sale Price',
-       x='# Full Bathrooms', y='Sale Price') + theme_minimal()
+       x='# Full Bathrooms', y='Sale Price') + theme_minimal(base_family='roboto')
 
 p1 + p2
 
 ```
 
 ```{r}
-ggplot(all_sales) + 
-  geom_histogram(aes(x=log(lotsize_acre)))
+train <- all_sales |> 
+  filter(split=='train')
 
-```
-
-```{r}
-ggplot(all_sales) + 
-  geom_histogram(aes(x=log(building_000sf)))
+ggplot(train) +
+  geom_sf(aes(color = sale_price), alpha = 0.4, size = 0.4) +
+  scale_color_viridis_c(
+    option = "magma",
+    trans  = "log10",
+    labels = scales::label_dollar(scale_cut = scales::cut_short_scale()),
+    name   = "Sale price"
+  ) +
+  theme_void()
 ```
 
 **Answer:** What in your exploration shaped your modeling choices?
 
-*Your answer:*
+*Your answer:* The primary decision made in our modeling choices was to square the `building_age` term. Even though the bedrooms and bathrooms graph had a curved line, we didn't really buy a non-linear relationship between those predictors and `sale_price`.
 
 ------------------------------------------------------------------------
 
@@ -367,11 +369,11 @@ all_sales <- all_sales %>%
 ```{r}
 p1 <- ggplot(all_sales, aes(x = dist_l_stations_mi, y = sale_price)) +
   geom_point(alpha=0.4) +
-  geom_smooth(method = "lm", formula = y ~ I(x^2)) + theme_minimal()
+  geom_smooth(method = "lm", formula = y ~ I(x^2)) + theme_minimal(base_family='roboto')
 
 p2 <- ggplot(all_sales, aes(x = dist_loop_mi, y = sale_price)) +
   geom_point(alpha=0.4) +
-  geom_smooth(method = "lm", formula = y ~ I(x^2)) + theme_minimal()
+  geom_smooth(method = "lm", formula = y ~ I(x^2)) + theme_minimal(base_family='roboto')
 
 p1 + p2
 ```
@@ -867,7 +869,7 @@ map_resid <- function(var, title, data = train, basemap = zones) {
       midpoint = 0, limits = c(-500000, 500000), oob = scales::squish
     ) +
     labs(title = title, color = "Residual") +
-    theme_void()
+    theme_void(base_family='roboto')
 }
 
 map_resid("resid_base",  "Baseline model residuals") + 
@@ -922,18 +924,33 @@ train |> st_join(income["estimate"]) |> st_drop_geometry() |>
 
 Refit your final recipe on all training sales, then predict every test house. Set `f_final` to your final formula.
 
+::: callout-warning
+**NOTE**: For some reason, the line starting with `check_na` kept picking up the `NA` values of `sale_price` in the `test` dataset. We checked, and the only `NA` values in the entire `all_sales` table were the `sale_price` values in the `test` dataset, which are supposed to be `NA`.
+
+To fix this, we updated the code below to run `check_na()` on ONLY the predictors, because the `test` split is supposed to have `NA` values in the `sale_price` column.
+:::
+
+```{r}
+all_sales |> 
+  st_drop_geometry() |> 
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(cols = everything(), 
+               names_to = "Column_Name", 
+               values_to = "NA_Count")
+```
+
 ```{r}
 #| eval: false
 #| label: predict-test
 m_final <- lm(f_final, data = st_drop_geometry(train))
 
 test <- all_sales |>  filter(split == "test")
-check_na(f_final, st_drop_geometry(test))       # fill NAs; never drop test rows
+check_na(update(f_final, NULL ~ .), st_drop_geometry(test))  # fill NAs; never drop test rows
 
 preds <- tibble(id = test$id, pred = predict(m_final, st_drop_geometry(test)))
 
 stopifnot(nrow(preds) == nrow(test), all(is.finite(preds$pred)))
-write_csv(preds, "team_XX_predictions.csv")     # replace XX with your team number
+write_csv(preds, "team_minecraft_predictions.csv")     # replace XX with your team number
 ```
 
 **Final CV RMSE:** \_\_\_ . When your test RMSE comes back, you'll explain the gap on Q7.
@@ -965,11 +982,15 @@ Overall, we suggest that this model is useful as a preliminary, exploratory tool
 | Name    | Main contribution                       |
 |---------|-----------------------------------------|
 | Nathan  | Distance-based coefficients, reflection |
-| Isaac   |                                         |
-| Michael |                                         |
+| Isaac   | The L, Loop, and Part 4                 |
+| Michael | Data cleaning, chart formatting         |
 
 ### AI Team Statement
 
 What was your team's AI policy and how was AI used in this assignment?
 
 Nathan: I used AI to convert the lat-long coordinates and WKT geometry columns in the CSV files to cleaned spatial point features, which allowed me to calculate the distance from each property to the nearest amenity (pharmacy, alternative charging station, etc.).
+
+Michael: I used AI to explain topics I need refreshing on through the assignment process.
+
+Isaac: I used AI to calculate the income quantile ratios.
