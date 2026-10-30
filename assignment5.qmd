@@ -864,7 +864,7 @@ map_resid <- function(var, title, data = train, basemap = zones) {
     ) +
     scale_color_gradient2(
       low = "#2166ac", mid = "grey95", high = "#b2182b",
-      midpoint = 0, limits = c(-900, 900), oob = scales::squish
+      midpoint = 0, limits = c(-500000, 500000), oob = scales::squish
     ) +
     labs(title = title, color = "Residual") +
     theme_void()
@@ -890,9 +890,31 @@ What helped most in our model was adding the fixed effects, bringing the RMSE do
 ```{r}
 #| eval: false
 #| label: part-4
+
+train$cv_pred  <- cv_pred(f_final, train)
+train <- train |> mutate(resid_cv = sale_price - cv_pred,
+                         ratio    = cv_pred / sale_price)
+
+income <- get_acs(geography = "tract", 
+               variables = "B19013_001", 
+               state = "IL",
+               county = "Cook", 
+               year = 2023, 
+               geometry = TRUE) |>
+  st_transform(3435)
+
+train |> st_join(income["estimate"]) |> st_drop_geometry() |>
+  mutate(income_quintile = ntile(estimate, 5)) |>
+  group_by(income_quintile) |>
+  summarise(median_ratio = median(ratio, na.rm = TRUE), n = n())
+
 ```
 
 *Your answers:*
+
+4A: The final model under-predicted the most in the northeastern side on the city where houses sold for \$500,000 or more above the prediction. On a smaller scale, there are streaks of over-predictions within this area too where houses sold under the prediction by a margin of \$500,000 or more. These failures could be due to the high variation between block prices within this community that is not factored within the model.
+
+4B: With the calculated ratios between the predicted values and the actual sale prices of the houses, this was added with income data from the Census to determine if the "Tax Divide" describes in the Tribune is seen in our model. Based on the table above, the ratios for all 5 quintiles hovers around 1, with the lowest income quintile (1) being just above 1. There is a slight dip below 1 in the median ratio for income quintiles 2, 3, and 4, before approaching 1 in the highest income quintile (5). Thus, our model's median ratio does not differ by income.
 
 ------------------------------------------------------------------------
 
@@ -940,9 +962,11 @@ Overall, we suggest that this model is useful as a preliminary, exploratory tool
 
 ### Who did what
 
-| Name   | Main contribution                       |
-|--------|-----------------------------------------|
-| Nathan | Distance-based coefficients, reflection |
+| Name    | Main contribution                       |
+|---------|-----------------------------------------|
+| Nathan  | Distance-based coefficients, reflection |
+| Isaac   |                                         |
+| Michael |                                         |
 
 ### AI Team Statement
 
